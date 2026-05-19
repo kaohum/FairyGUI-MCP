@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-fairygui"
+version = "0.0.1"
+description = "MCP service for FairyGUI editor automation - let AI assistants operate FairyGUI editor"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=0.1.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+windows = [
+    "pywin32>=305",
+    "Pillow>=10.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+mcp-fairygui = "mcp_fairygui.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_fairygui"]

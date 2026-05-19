@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "fairygui-tools": {
+      "command": "python",
+      "args": ["-m", "mcp_fairygui.server"],
+      "cwd": "/path/to/fairyGUI-MCP",
+      "env": {
+        "UI_PROJECT_PATH": "/path/to/your/fairygui-project"
+      }
+    }
+  }
+}

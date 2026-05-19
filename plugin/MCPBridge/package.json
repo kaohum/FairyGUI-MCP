@@ -1,0 +1,16 @@
+{
+  "name": "MCPBridge",
+  "displayName": "MCP Bridge Plugin",
+  "description": "Bridge plugin for MCP service - enables AI assistants to interact with FairyGUI editor",
+  "version": "0.0.1",
+  "author": {
+    "name": "fairyGUI-MCP contributors"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/fairyGUI-MCP"
+  },
+  "license": "MIT",
+  "icon": "",
+  "main": "main.lua"
+}
