@@ -211,10 +211,25 @@ def register(mcp: FastMCP, project_root: Path, ui_project_path: Path):
                     elif tag == "list":
                         layout = elem.get("layout", "")
                         default_item = elem.get("defaultItem", "")
+                        overflow = elem.get("overflow", "")
+                        auto_clear = elem.get("autoClearItems", "")
+                        margin = elem.get("margin", "")
+                        line_gap = elem.get("lineGap", "")
+                        col_gap = elem.get("colGap", "")
                         if layout:
                             lines.append(f"- 布局：{layout}")
                         if default_item:
                             lines.append(f"- 默认项：{default_item}")
+                        if overflow:
+                            lines.append(f"- 溢出：{overflow}")
+                        if auto_clear == "true":
+                            lines.append(f"- 自动清理项：true")
+                        if margin:
+                            lines.append(f"- 边距：{margin}")
+                        if line_gap:
+                            lines.append(f"- 行间距：{line_gap}")
+                        if col_gap:
+                            lines.append(f"- 列间距：{col_gap}")
 
                     elif tag == "component":
                         src = elem.get("src", "")
@@ -223,6 +238,16 @@ def register(mcp: FastMCP, project_root: Path, ui_project_path: Path):
                             lines.append(f"- 组件：{src}")
                         if pkg:
                             lines.append(f"- 包：{pkg}")
+
+                    # customData（插件配置：i18n/feature_lock/shortNumber 等）
+                    custom_data = elem.get("customData", "")
+                    if custom_data:
+                        lines.append(f"- customData: {custom_data}")
+
+                    # group 归属
+                    group = elem.get("group", "")
+                    if group:
+                        lines.append(f"- 所属分组: {group}")
 
                     # Gear
                     gears = [child for child in elem if child.tag.startswith("gear")]
@@ -245,6 +270,16 @@ def register(mcp: FastMCP, project_root: Path, ui_project_path: Path):
                             target = rel.get("target", "")
                             side_pair = rel.get("sidePair", "")
                             lines.append(f"  - 目标：{target or '组件本身'}, 关系：{side_pair}")
+
+                    # 元素内扩展属性（Button/Label 等子节点）
+                    ext_tags = ("Button", "Label", "ProgressBar", "Slider", "ComboBox", "Tree")
+                    for child in elem:
+                        if child.tag in ext_tags:
+                            ext_attrs = child.attrib
+                            if ext_attrs:
+                                lines.append(f"- {child.tag} 扩展:")
+                                for attr, value in ext_attrs.items():
+                                    lines.append(f"  - {attr}: {value}")
 
                     lines.append("")
 

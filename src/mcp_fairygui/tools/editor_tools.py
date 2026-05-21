@@ -28,13 +28,19 @@ def register(mcp: FastMCP, bridge_path: Path):
     def fg_editor_activate() -> str:
         """激活 FairyGUI 编辑器窗口
 
-        将 FairyGUI 编辑器置于前台。
+        将 FairyGUI 编辑器置于前台（通过 Win32 API）。
         注意：需要 FairyGUI 编辑器正在运行且 MCPBridge 插件已加载。
 
         Returns:
             操作结果
         """
+        # Win32 API 激活窗口（Python 侧负责）
+        ensure_editor_active()
+
+        # Lua 侧设置 runInBackground
         result = _send_command("activate", {})
+        if result.get("status") == "success":
+            return "编辑器已激活（通过 Win32 API）"
         return _format_result(result, "编辑器激活命令已发送")
 
     @mcp.tool()
@@ -51,8 +57,8 @@ def register(mcp: FastMCP, bridge_path: Path):
         """
         result = _send_command("reload", {"package_name": package_name})
         if package_name:
-            return _format_result(result, f"包 '{package_name}' 已刷新")
-        return _format_result(result, "项目已刷新")
+            return _format_result(result, f"包 '{package_name}' 刷新命令已发送")
+        return _format_result(result, "项目刷新命令已发送")
 
     @mcp.tool()
     def fg_editor_open_component(package_name: str, component_name: str) -> str:
@@ -209,12 +215,21 @@ def register(mcp: FastMCP, bridge_path: Path):
 
         if result.get("status") == "success":
             data = result.get("data", {})
+            item_name = data.get("item_name", component_name)
+            item_id = data.get("item_id", "")
             device = data.get("device", "default")
+            device_found = data.get("device_found", True)
             res_x = data.get("resolutionX", 0)
             res_y = data.get("resolutionY", 0)
-            lines = [f"预览已启动: {package_name}/{component_name}"]
-            if device != "default":
-                lines.append(f"设备: {device} ({res_x}x{res_y})")
+            methods = data.get("methods", "")
+            lines = [f"预览已启动: {package_name}/{item_name} (id={item_id})"]
+            if device_name:
+                if device_found:
+                    lines.append(f"设备: {device} ({res_x}x{res_y})")
+                    if methods:
+                        lines.append(f"切换方法: {methods}")
+                else:
+                    lines.append(f"警告: 设备 '{device_name}' 未找到，使用默认分辨率。可用设备请使用 fg_editor_list_devices 查询")
             lines.append("提示: 使用 fg_editor_capture_preview 截图，fg_editor_stop_test 停止预览")
             return "\n".join(lines)
 
@@ -250,7 +265,10 @@ def register(mcp: FastMCP, bridge_path: Path):
             data = result.get("data", {})
             path = data.get("path", "")
             filename = data.get("screenshot", f"{save_name}.png")
-            return f"预览截图已保存: {path}\n文件名: {filename}"
+            capture_source = data.get("capture_source", "unknown")
+            lines = [f"预览截图已保存: {path}", f"文件名: {filename}"]
+            lines.append(f"截图目标: {capture_source}")
+            return "\n".join(lines)
 
         return f"截图失败: {result.get('error', '未知错误')}"
 
@@ -343,10 +361,12 @@ def register(mcp: FastMCP, bridge_path: Path):
             if not controllers:
                 return f"组件 '{comp_name}' 没有控制器"
 
-            # 从 XML 补充页面名称
+            # 从 XML 补充页面名称和默认页
             xml_pages = {}
+            xml_selected = {}
             if pkg_name and component_name:
                 xml_pages = _get_all_controller_pages_from_xml(pkg_name, component_name)
+                xml_selected = _get_controller_saved_selected_from_xml(pkg_name, component_name)
 
             lines = [f"组件 '{comp_name}' 共 {len(controllers)} 个控制器:", ""]
             for i, ctrl in enumerate(controllers, 1):
@@ -359,6 +379,9 @@ def register(mcp: FastMCP, bridge_path: Path):
                 if alias:
                     header += f" ({alias})"
                 header += f" - 当前页: {selected}, 共{page_count}页"
+                saved_sel = xml_selected.get(name)
+                if saved_sel is not None and saved_sel != selected:
+                    header += f" (XML默认: {saved_sel})"
                 lines.append(header)
 
                 # 显示页面详情
@@ -372,6 +395,36 @@ def register(mcp: FastMCP, bridge_path: Path):
             return "\n".join(lines)
 
         return _format_result(result, "列出控制器")
+
+    @mcp.tool()
+    def fg_editor_select_element(element_name: str) -> str:
+        """在编辑器中选中指定元素
+
+        在当前打开的组件中选中指定名称的元素。选中后可在编辑器中查看其属性。
+
+        Args:
+            element_name: 要选中的元素名称（如 "title", "bg"）
+
+        Returns:
+            选中结果
+        """
+        result = _send_command("select_element", {
+            "element_name": element_name
+        })
+
+        if result.get("status") == "success":
+            data = result.get("data", {})
+            select_method = data.get("select_method", "unknown")
+            inspector_refreshed = data.get("inspector_refreshed", False)
+            refresh_method = data.get("inspector_refresh_method", "none")
+            lines = [f"已选中元素: {element_name}", f"选中方法: {select_method}"]
+            if inspector_refreshed:
+                lines.append(f"检查器刷新: 已触发 ({refresh_method})")
+            else:
+                lines.append("检查器刷新: 未触发（请手动点击检查器面板）")
+            return "\n".join(lines)
+
+        return f"选中元素失败: {result.get('error', '未知错误')}"
 
     @mcp.tool()
     def fg_editor_save() -> str:
@@ -429,46 +482,8 @@ def register(mcp: FastMCP, bridge_path: Path):
         else:
             return "重载信号已处理，但通信验证失败，请检查 command_handler.lua 是否有语法错误"
 
-    @mcp.tool()
-    def fg_editor_reload_all_plugins() -> str:
-        """重载所有 FairyGUI 插件
 
-        通过 PluginSystem.ReloadAll() 重载所有已加载的插件（包括 MCPBridge 自身）。
-        重载后 MCPBridge 会自动重新初始化。
 
-        Returns:
-            操作结果
-        """
-        result = _send_command("reload_all_plugins", {}, timeout_ms=8000)
-
-        if result.get("status") == "success":
-            data = result.get("data", {})
-            details = data.get("details", [])
-
-            if data.get("reloaded"):
-                # ReloadAll 已调度，等待插件重载完成后验证通信
-                time.sleep(2.0)
-
-                # 验证 MCPBridge 是否重新启动
-                verify = _send_command("list_packages", {}, timeout_ms=5000)
-                if verify.get("status") == "success":
-                    pkg_count = verify.get("data", {}).get("count", 0)
-                    lines = [f"所有插件已重载成功 (方法: {data.get('method', 'unknown')})"]
-                    lines.append(f"MCPBridge 已重新初始化，{pkg_count} 个 UI 包可用")
-                    for d in details:
-                        lines.append(f"  - {d}")
-                    return "\n".join(lines)
-                else:
-                    lines = ["插件重载已触发，但 MCPBridge 未能重新初始化"]
-                    lines.append("可能需要在编辑器中手动检查插件状态")
-                    return "\n".join(lines)
-            else:
-                lines = ["未能重载所有插件:"]
-                for d in details:
-                    lines.append(f"  - {d}")
-                return "\n".join(lines)
-
-        return _format_result(result, "重载所有插件")
 
     @mcp.tool()
     def fg_editor_status() -> str:
@@ -519,6 +534,7 @@ def register(mcp: FastMCP, bridge_path: Path):
 
         将指定的 FairyGUI UI 包发布到 Unity 项目。
         发布路径由 FairyGUI 项目设置中的全局发布设置决定。
+        注意：FairyGUI 发布按钮会发布所有包，无法单独发布指定包。
 
         Args:
             package_name: 要发布的包名称
@@ -532,7 +548,16 @@ def register(mcp: FastMCP, bridge_path: Path):
 
         if result.get("status") == "success":
             data = result.get("data", {})
-            return f"发布成功: {data.get('package', package_name)}\n路径: {data.get('path', 'N/A')}"
+            if data.get("published"):
+                # 发布后激活编辑器窗口（防止 runInBackground 被覆盖导致通信中断）
+                ensure_editor_active()
+                msg = f"发布已触发: {data.get('package', package_name)}\n路径: {data.get('path', 'N/A')}\n方法: {data.get('method', 'unknown')}"
+                if data.get("warning"):
+                    msg += f"\n警告: {data['warning']}"
+                return msg
+            else:
+                reason = data.get("reason", "未知原因")
+                return f"发布失败: {reason}\n请尝试在编辑器中手动发布"
 
         return f"发布失败: {result.get('error', '未知错误')}"
 
@@ -555,19 +580,23 @@ def register(mcp: FastMCP, bridge_path: Path):
             failed = data.get("failed", 0)
             path = data.get("path", "N/A")
 
-            lines = [f"发布完成: {published}/{total} 个包成功"]
-            lines.append(f"发布路径: {path}")
+            if published > 0:
+                # 发布后激活编辑器窗口（防止 runInBackground 被覆盖导致通信中断）
+                ensure_editor_active()
+                lines = [f"发布已触发: {published}/{total} 个包"]
+                lines.append(f"发布路径: {path}")
+                lines.append(f"方法: {data.get('method', 'unknown')}")
 
-            if failed > 0:
-                lines.append(f"\n失败的包 ({failed} 个):")
-                for fp in data.get("failed_packages", []):
-                    lines.append(f"  - {fp.get('name')}: {fp.get('error', '未知错误')}")
+                lines.append(f"\n涉及的包:")
+                for pkg in data.get("packages", []):
+                    lines.append(f"  - {pkg}")
 
-            lines.append(f"\n成功发布的包:")
-            for pkg in data.get("packages", []):
-                lines.append(f"  - {pkg}")
-
-            return "\n".join(lines)
+                return "\n".join(lines)
+            else:
+                reason = data.get("reason", "未知原因")
+                lines = [f"发布失败: {reason}"]
+                lines.append("请尝试在编辑器中手动发布（菜单: 项目 > 发布）")
+                return "\n".join(lines)
 
         return f"发布失败: {result.get('error', '未知错误')}"
 
@@ -763,6 +792,31 @@ def _format_result(result: Dict[str, Any], success_msg: str) -> str:
         return f"操作失败: {error}"
 
 
+def _get_controller_saved_selected_from_xml(package_name: str, component_name: str) -> Dict[str, int]:
+    """从组件 XML 解析控制器保存的默认选中页
+
+    Returns:
+        {controller_name: saved_selected_index}
+    """
+    xml_content = _read_component_xml(package_name, component_name)
+    if not xml_content:
+        return {}
+
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError:
+        return {}
+
+    result = {}
+    for ctrl in root.findall("controller"):
+        name = ctrl.get("name", "")
+        selected = ctrl.get("selected", "")
+        if name and selected.isdigit():
+            result[name] = int(selected)
+
+    return result
+
+
 def _get_all_controller_pages_from_xml(package_name: str, component_name: str) -> Dict[str, Dict[int, str]]:
     """从组件 XML 解析所有控制器的页面名称
 
@@ -789,6 +843,16 @@ def _get_all_controller_pages_from_xml(package_name: str, component_name: str) -
         for i in range(0, len(pages), 2):
             if i + 1 < len(pages):
                 page_map[i // 2] = pages[i + 1]
+
+        # 用 remark 补充空页名（pages 中 name 为空时，remark 提供可读标签）
+        for remark in ctrl.findall("remark"):
+            page = remark.get("page", "")
+            value = remark.get("value", "")
+            if page.isdigit() and value:
+                page_idx = int(page)
+                if not page_map.get(page_idx):
+                    page_map[page_idx] = value
+
         result[name] = page_map
 
     return result

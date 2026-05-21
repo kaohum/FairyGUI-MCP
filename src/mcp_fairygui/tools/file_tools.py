@@ -1,9 +1,12 @@
 """文件管理工具 — 创建、移动、删除 FairyGUI 资源"""
 
+import json
 import os
 import random
 import string
 import shutil
+import time
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple, List
 from fastmcp import FastMCP
@@ -107,8 +110,43 @@ _TYPE_EXTENSIONS = {
 
 # ---------- 注册工具 ----------
 
-def register(mcp: FastMCP, project_root: Path, ui_project_path: Path):
+_bridge_path: Path = None
+
+
+def _send_reload_command(package_name: str) -> None:
+    """发送 reload 命令到编辑器，刷新指定包的资源。
+
+    操作文件（移动/删除）后编辑器不会自动感知变化，
+    需要通过 IPC 发送 reload 命令触发编辑器刷新。
+    """
+    if not _bridge_path:
+        return
+
+    commands_dir = _bridge_path / "commands"
+    try:
+        commands_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    cmd_id = f"auto_reload_{uuid.uuid4().hex[:8]}"
+    cmd_file = commands_dir / f"{cmd_id}.json"
+    try:
+        cmd = {
+            "id": cmd_id,
+            "action": "reload",
+            "params": {"package_name": package_name},
+            "timeout": 5000
+        }
+        with open(cmd_file, "w", encoding="utf-8") as f:
+            json.dump(cmd, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def register(mcp: FastMCP, project_root: Path, ui_project_path: Path, bridge_path: Path):
     """注册文件管理工具"""
+    global _bridge_path
+    _bridge_path = bridge_path
 
     # ========== fg_create_resource 已暂时禁用 ==========
     # @mcp.tool()
@@ -281,7 +319,13 @@ def register(mcp: FastMCP, project_root: Path, ui_project_path: Path):
         if new_path and _normalize_path(new_path) != old_path:
             parts.append(f"移动：{old_path} → {target_path}")
         detail = "；".join(parts) if parts else "无变更"
-        return f"成功移动资源：{package_name}/{target_name}\n{detail}"
+        result_msg = f"成功移动资源：{package_name}/{target_name}\n{detail}"
+
+        # 自动触发编辑器刷新
+        _send_reload_command(package_name)
+        result_msg += "\n已发送刷新命令到编辑器"
+
+        return result_msg
 
     @mcp.tool()
     def fg_delete_resource(
@@ -351,4 +395,10 @@ def register(mcp: FastMCP, project_root: Path, ui_project_path: Path):
         except Exception as e:
             return f"错误：写入 package.xml 失败：{e}"
 
-        return f"成功删除资源：{package_name}/{resource_name} (类型：{res_type})"
+        delete_msg = f"成功删除资源：{package_name}/{resource_name} (类型：{res_type})"
+
+        # 自动触发编辑器刷新
+        _send_reload_command(package_name)
+        delete_msg += "\n已发送刷新命令到编辑器"
+
+        return delete_msg
