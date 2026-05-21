@@ -43,28 +43,32 @@
 - testView 内部可能通过事件系统切换设备（不是直接调 API）
 - 联系 FairyGUI 作者获取确切 API
 
-### 3. `fg_editor_select_element` 触发 CustomShadow 插件越界报错
+### 3. `fg_editor_select_element` 检查器面板无法自动同步（FairyEditor 私有 API 限制，无解）
 
-**现状**：
-- 元素能选中（`doc:SetSelection(targetChild)` 不报错）
-- 但触发 `Plugin-CustomShadow` 在 `OnUpdate` 中越界报错
-- 检查器面板未自动刷新
+**最新状态（2026-05-22）**：
+- ✅ 已修复 `Plugin-CustomShadow` 越界报错（改用 `SelectObject` 替代 `SetSelection`）
+- ✅ selection 集合正确更新到目标元素（画布选中框跟随）
+- ❌ 右侧检查器面板**仍然无法自动同步**
 
-**报错堆栈**：
-```
-[string "Plugin-CustomShadow"]:294: in function <[string "Plugin-CustomShadow"]:243>
-at FairyEditor.App.OnUpdate ()
-```
+**根因（已验证）**：
+- 检查器面板渲染源是 `Document.inspectingTarget` 字段
+- 反射验证：`canWrite=false`，是 C# 的 `{ get; private set; }` 只读属性
+- setter 由编辑器 selectionLayer 鼠标事件链路内部触发，外部 Lua 无路径接入
+- 已穷举尝试均无效：
+  - 直接赋值 `doc.inspectingTarget = target`（静默失败）
+  - `doc:SelectObject(...)` / `doc:SetSelection(...)` / `doc:OpenChild(...)`
+  - `App.Dispatch(EditorEvents.SelectionChanged)` 派发事件
+  - `doc:RefreshInspectors(flags)` 强制刷新
+  - `docFactory:InvokeDocumentMethod(...)` 反射调（已留作前向兼容兜底）
 
-CustomShadow 插件在 OnUpdate 中读取 `doc.inspectingObjectType` 和 `doc.inspectingTarget`，可能在我们手动 SetSelection 后某个内部状态不一致。
+**已采纳的诚实降级方案**：
+- 工具返回值明确字段：`selection_verified`（selection 是否更新成功）、`inspector_synced=false`（始终为 false）、`note`（说明文字）
+- 工具描述中明确告知调用方：检查器面板需要在编辑器中手动点击元素查看
+- 接受现状：MCP 工具能控制画布层（截图/选中框/控制器切换等），但**无法控制右侧检查器面板**
 
-**已尝试方案（失败）**：
-- 用 `List<GObject>` 封装传入 SetSelection — Lua xLua 类型映射困难
-
-**待探查**：
-- FairyGUI 编辑器手动点击元素时调用的真正 API（可能是 `doc:OnElementClick` 之类的）
-- `doc.inspectingTarget` 应该如何同步设置
-- 是否需要通过 `App.docView` 而非 `doc` 来触发选中
+**未来可能的解决方向**：
+- 等 FairyEditor 升级，公开 `inspectingTarget` setter 或新增公开方法（如 `Inspect(obj)`）
+- 自定义 FairyEditor 编辑器源码（通过反射或 IL 修改）— 本项目暂无此能力
 
 ## 🟡 中优先级（增强功能）
 

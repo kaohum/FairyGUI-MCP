@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-05-22
+
+### 🎯 Highlights
+
+修复 `fg_editor_select_element` 调用时触发 `Plugin-CustomShadow` 越界报错的问题。深入探查 FairyEditor 内部 API 后确认：右侧检查器面板的渲染源 `Document.inspectingTarget` 是 C# 只读属性（`{ get; private set; }`），其 setter 由编辑器 selectionLayer 鼠标事件链路内部触发，**外部 Lua 完全无法写入**。本次修复采用诚实降级方案：保留 selection 同步能力（画布选中框跟随），明确告知调用方检查器面板需手动点击。
+
+### Changed
+
+- **`fg_editor_select_element`** — 重写 `handleSelectElement`：
+  - 选中策略改为 `UnselectAll() + SelectObject(target, true, true)` 组合（独占选中），避开会触发 CustomShadow 越界的 `SetSelection` 旧 API
+  - 元素查找简化为 2 种策略：`FComponent:GetChild(name)` 直查，加 `FComponent.children` 列表遍历兜底（删除原 LuaAPI 不存在的 `displayList` / `GetChildren()` 接口）
+  - 删除原本的 6 种猜测式刷新代码（`docView:Refresh/Repaint/UpdateInspector`、`doc:Invalidate/RefreshInspector`、deselect-then-reselect、延迟刷新），它们对实际刷新检查器都无效
+  - 添加 `docFactory:InvokeDocumentMethod(...)` 反射兜底（试调 `InspectObject` / `Inspect` / `SetInspectingTarget` 等方法名），目前没有匹配的方法名，但保留为前向兼容
+  - 新增 `selection_verified` 字段验证 selection 是否真的更新到目标元素
+  - 返回值字段重命名：`select_method` / `inspector_refreshed` / `inspector_refresh_method` → `selection_verified` / `inspector_synced` / `inspector_sync_method` / `note`
+
+### Fixed
+
+- **`fg_editor_select_element` 触发 CustomShadow 越界** — 改用 `SelectObject` 替代 `SetSelection`，从源头消除 `inspectingObjectType` / `inspectingTarget` 状态不一致导致的越界。
+
+### Known Issues (重新分类)
+
+- **`Document.inspectingTarget` 不可写**（FairyEditor 私有 API 限制，无解）— `fg_editor_select_element` 只能更新 selection（驱动画布选中框），无法让右侧检查器面板自动同步到所选元素。如需查看属性，必须由人工在编辑器中手动点击元素。这一限制已写入工具描述和 TODO.md。
+
+### Internal
+
+- **探查记录** — 通过临时 `read_select_state` / `select_only` 探查命令对照"用户手动点击"和"MCP 调 SelectObject"的状态差异，确认：
+  - 手动点击 propertyBtn → `inspectingTarget=propertyBtn`，`visibleInspectorsCount=9`（含 ButtonPropsPanel 等元素级 inspector）
+  - MCP 调 SelectObject → `inspectingTarget=DocContent`（永远是根组件），`visibleInspectorsCount=5`（只有组件级 inspector）
+  - 反射查 `Document.inspectingTarget` 属性：`canRead=true, canWrite=false, fieldExists=false`
+  - 已尝试的所有路径均无效：直接赋值、`SelectObject`、`SetSelection`、`OpenChild`、`UnselectAll + SelectObject`、`App.Dispatch(SelectionChanged)`、`Document.RefreshInspectors(flags)`
+
+---
+
 ## [Unreleased] - 2026-05-21
 
 ### 🎯 Highlights

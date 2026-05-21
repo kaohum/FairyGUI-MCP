@@ -1479,6 +1479,18 @@ end
 -- ========== 选择元素命令 (NEW-1) ==========
 
 -- 在编辑器中选中指定元素
+--
+-- 已知限制（FairyEditor 私有 API 限制，无解）：
+-- 右侧检查器面板的渲染源是 Document.inspectingTarget 字段，该字段是 C# 的
+-- { get; private set; } 只读属性，setter 由编辑器 selectionLayer 鼠标事件链路
+-- 内部触发，外部 Lua 无法写入。这意味着本工具只能更新 selection（驱动画布选中
+-- 框），无法让右侧检查器面板自动切换到所选元素的属性。如需查看属性，必须由人
+-- 工在编辑器中手动点击元素。
+--
+-- 实现采用 UnselectAll + SelectObject 组合：
+-- - UnselectAll：清空旧选择，避免 SelectObject 把目标加入而不是替换
+-- - SelectObject(obj, scrollToView, allowOpenGroups)：编辑器内部选中元素的标
+--   准 API，会同步 selection 集合并触发画布选中框跟随
 function CommandHandler.handleSelectElement(params, bridgePath)
     local elementName = params.element_name
 
@@ -1491,49 +1503,29 @@ function CommandHandler.handleSelectElement(params, bridgePath)
         error("没有打开的文档")
     end
 
+    -- doc.content 类型为 FairyEditor.FComponent
+    -- FComponent:GetChild(name) 返回 FairyEditor.FObject（不是 FairyGUI.GObject）
+    -- Document:SelectObject 期望的也是 FObject，类型完全匹配
     local content = doc.content
     if not content then
         error("无法获取文档组件")
     end
 
-    -- 策略1: 直接在 content 的子元素中查找
+    -- 策略1: 直接按名称查找
     local targetChild = nil
-    local found = false
-
     pcall(function()
         targetChild = content:GetChild(elementName)
     end)
-    if targetChild then
-        found = true
-    end
 
-    -- 策略2: 如果直接查找失败，遍历 displayList（编辑器侧的显示列表）
-    if not found then
+    -- 策略2: 遍历 FComponent.children 列表兜底
+    if not targetChild then
         pcall(function()
-            local displayList = content.displayList
-            if displayList then
-                for i = 0, displayList.Count - 1 do
-                    local child = displayList[i]
-                    if child and child.name == elementName then
-                        targetChild = child
-                        found = true
-                        break
-                    end
-                end
-            end
-        end)
-    end
-
-    -- 策略3: 遍历所有子元素
-    if not found then
-        pcall(function()
-            local children = content:GetChildren()
-            if children then
-                for i = 0, children.Length - 1 do
+            local children = content.children
+            if children and children.Count then
+                for i = 0, children.Count - 1 do
                     local child = children[i]
                     if child and child.name == elementName then
                         targetChild = child
-                        found = true
                         break
                     end
                 end
@@ -1541,131 +1533,65 @@ function CommandHandler.handleSelectElement(params, bridgePath)
         end)
     end
 
-    if not found then
+    if not targetChild then
         error("元素不存在: " .. elementName)
     end
 
-    -- 设置选中
-    local selectOk = false
-    local selectMethod = "none"
-    local refreshOk = false
-    local refreshMethod = "none"
+    -- UnselectAll + SelectObject 组合：先清空旧选择再添加目标，等价于"独占选中"
+    pcall(function() doc:UnselectAll() end)
 
-    -- 方式1: doc:SetSelection
-    pcall(function()
-        doc:SetSelection(targetChild)
-        selectOk = true
-        selectMethod = "doc:SetSelection"
+    local selectOk, selectErr = pcall(function()
+        doc:SelectObject(targetChild, true, true)
     end)
 
-    -- 方式2: doc:Select
     if not selectOk then
-        pcall(function()
-            doc:Select(targetChild)
-            selectOk = true
-            selectMethod = "doc:Select"
-        end)
+        error("选中失败: " .. tostring(selectErr))
     end
 
-    -- 方式3: 通过 selectionController 选中
-    if not selectOk then
-        pcall(function()
-            doc:SetSelection(targetChild, false)
-            selectOk = true
-            selectMethod = "doc:SetSelection(obj, false)"
-        end)
-    end
-
-    if not selectOk then
-        error("无法选中元素: " .. elementName .. "（选中 API 不可用）")
-    end
-
-    -- FIX-4: 选中后触发检查器面板刷新
-    -- 尝试多种刷新方式，确保检查器面板更新
-
-    -- 方式A: docView 相关刷新 API
+    -- 尝试通过 docFactory:InvokeDocumentMethod 调用 Document 内部非 public 方法
+    -- 来同步 inspectingTarget。这是 FairyEditor 给 Lua 插件预留的反射调用入口。
+    local inspectorSyncMethod = "none"
+    local inspectorSynced = false
     pcall(function()
-        if App.docView and App.docView.Refresh then
-            App.docView:Refresh()
-            refreshOk = true
-            refreshMethod = "docView:Refresh()"
+        local methodCandidates = {
+            "InspectObject", "Inspect", "SetInspectingTarget",
+            "DoInspect", "UpdateInspectingTarget",
+        }
+        for _, methodName in ipairs(methodCandidates) do
+            local args = CS.System.Array.CreateInstance(typeof(CS.System.Object), 1)
+            args:SetValue(targetChild, 0)
+            local invokeOk = pcall(function()
+                App.docFactory:InvokeDocumentMethod(methodName, args)
+            end)
+            if invokeOk then
+                -- 检查 inspectingTarget 是否真的被改了
+                if doc.inspectingTarget and doc.inspectingTarget.name == elementName then
+                    inspectorSynced = true
+                    inspectorSyncMethod = "InvokeDocumentMethod(" .. methodName .. ")"
+                    break
+                end
+            end
         end
     end)
 
-    if not refreshOk then
-        pcall(function()
-            if App.docView and App.docView.Repaint then
-                App.docView:Repaint()
-                refreshOk = true
-                refreshMethod = "docView:Repaint()"
-            end
-        end)
-    end
-
-    if not refreshOk then
-        pcall(function()
-            if App.docView and App.docView.UpdateInspector then
-                App.docView:UpdateInspector()
-                refreshOk = true
-                refreshMethod = "docView:UpdateInspector()"
-            end
-        end)
-    end
-
-    -- 方式B: doc 相关刷新 API
-    if not refreshOk then
-        pcall(function()
-            if doc.Invalidate then
-                doc:Invalidate()
-                refreshOk = true
-                refreshMethod = "doc:Invalidate()"
-            end
-        end)
-    end
-
-    if not refreshOk then
-        pcall(function()
-            if doc.RefreshInspector then
-                doc:RefreshInspector()
-                refreshOk = true
-                refreshMethod = "doc:RefreshInspector()"
-            end
-        end)
-    end
-
-    -- 方式C: 尝试通过取消选中再重新选中来触发刷新
-    if not refreshOk then
-        pcall(function()
-            doc:SetSelection(nil)
-            CS.FairyGUI.Timers.inst:Add(0.05, 1, function()
-                pcall(function() doc:SetSelection(targetChild) end)
-            end)
-            refreshOk = true
-            refreshMethod = "deselect-then-reselect"
-        end)
-    end
-
-    -- 方式D: 最终兜底 - 延迟刷新
-    if not refreshOk then
-        pcall(function()
-            CS.FairyGUI.Timers.inst:Add(0.1, 1, function()
-                pcall(function()
-                    if App.docView and App.docView.Refresh then
-                        App.docView:Refresh()
-                    end
-                end)
-            end)
-            refreshOk = true
-            refreshMethod = "delayed docView:Refresh()"
-        end)
-    end
+    -- 校验 selection 是否真的更新到目标元素
+    local selectionVerified = false
+    pcall(function()
+        local sel = doc:GetSelection()
+        if sel and sel.Count == 1 and sel[0] and sel[0].name == elementName then
+            selectionVerified = true
+        end
+    end)
 
     return {
         selected = true,
         element_name = elementName,
-        select_method = selectMethod,
-        inspector_refreshed = refreshOk,
-        inspector_refresh_method = refreshMethod
+        selection_verified = selectionVerified,
+        inspector_synced = inspectorSynced,
+        inspector_sync_method = inspectorSyncMethod,
+        note = inspectorSynced
+            and "selection 已更新且检查器面板已同步"
+            or "selection 已更新（画布选中框已切换）。检查器面板的 inspectingTarget 是 FairyEditor 私有 setter，外部 Lua 无法写入；如需查看元素属性请在编辑器中手动点击。"
     }
 end
 

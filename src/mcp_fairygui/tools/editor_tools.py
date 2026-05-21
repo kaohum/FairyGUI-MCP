@@ -400,7 +400,14 @@ def register(mcp: FastMCP, bridge_path: Path):
     def fg_editor_select_element(element_name: str) -> str:
         """在编辑器中选中指定元素
 
-        在当前打开的组件中选中指定名称的元素。选中后可在编辑器中查看其属性。
+        在当前打开的组件中选中指定名称的元素。selection 集合会更新，画布上的
+        选中框会跟随切换。
+
+        【已知限制】右侧检查器面板的渲染源是 Document.inspectingTarget 字段，
+        该字段是 C# 的 { get; private set; } 只读属性，setter 由编辑器 selection
+        layer 鼠标事件链路内部触发，外部 Lua 无法写入。因此本工具无法让右侧检
+        查器面板自动切换显示所选元素的属性——如需查看属性，请在编辑器中手动
+        点击元素。
 
         Args:
             element_name: 要选中的元素名称（如 "title", "bg"）
@@ -414,14 +421,14 @@ def register(mcp: FastMCP, bridge_path: Path):
 
         if result.get("status") == "success":
             data = result.get("data", {})
-            select_method = data.get("select_method", "unknown")
-            inspector_refreshed = data.get("inspector_refreshed", False)
-            refresh_method = data.get("inspector_refresh_method", "none")
-            lines = [f"已选中元素: {element_name}", f"选中方法: {select_method}"]
-            if inspector_refreshed:
-                lines.append(f"检查器刷新: 已触发 ({refresh_method})")
-            else:
-                lines.append("检查器刷新: 未触发（请手动点击检查器面板）")
+            verified = data.get("selection_verified", False)
+            inspector_synced = data.get("inspector_synced", False)
+            note = data.get("note", "")
+            lines = [f"已选中元素: {element_name}"]
+            lines.append(f"selection 验证: {'通过' if verified else '未通过（请检查元素名是否正确）'}")
+            lines.append(f"检查器面板同步: {'已同步' if inspector_synced else '未同步（FairyEditor 私有 API 限制）'}")
+            if note:
+                lines.append(f"说明: {note}")
             return "\n".join(lines)
 
         return f"选中元素失败: {result.get('error', '未知错误')}"
