@@ -41,12 +41,12 @@ local loadOk, CommandHandler = pcall(function()
     return dofile(PluginPath .. "/src/command_handler.lua")
 end)
 if not loadOk then
-    fprint("[MCPBridge] ✗ 加载 command_handler.lua 失败: " .. tostring(CommandHandler))
+    fprint("[MCPBridge]  加载 command_handler.lua 失败: " .. tostring(CommandHandler))
     CommandHandler = nil
 end
 
--- 定时器回调引用
-local timerCallback = nil
+-- 定时器回调引用 — 存入 _G 使其跨重载持久化
+_G._mcpBridgeTimerCallback = nil
 
 -- 调试计数器
 local pollCount = 0
@@ -67,8 +67,21 @@ local function init()
     -- 创建通信目录
     CommandHandler.initBridge(bridgePath)
 
+    -- 生成唯一 ID，供旧回调检测"自己是否已被新环境覆盖"
+    local myCallbackId = tostring({})
+    _G._mcpBridgeCallbackId = myCallbackId
+
     -- 使用 Timers 实现轮询 (每 0.1 秒检查一次)
-    timerCallback = function()
+    -- 关键修复：闭包内检查 _G._mcpBridgeCallbackId 是否仍等于自己的 ID，
+    -- 如果不等说明发生了重载，旧回调应自杀移除
+    _G._mcpBridgeTimerCallback = function()
+        -- 旧回调自杀：如果全局 ID 已变更，说明发生了重载
+        if _G._mcpBridgeCallbackId ~= myCallbackId then
+            CS.FairyGUI.Timers.inst:Remove(_G._mcpBridgeTimerCallback)
+            _G._mcpBridgeTimerCallback = nil
+            return
+        end
+
         -- 每次轮询都重新设置 runInBackground
         -- F5/Preview 模式会频繁覆盖此值，必须持续重置
         CS.UnityEngine.Application.runInBackground = true
@@ -98,7 +111,7 @@ local function init()
 
         CommandHandler.poll(bridgePath)
     end
-    CS.FairyGUI.Timers.inst:Add(0.1, 0, timerCallback)
+    CS.FairyGUI.Timers.inst:Add(0.1, 0, _G._mcpBridgeTimerCallback)
 
     fprint("[MCPBridge] 插件已启动")
     fprint("[MCPBridge] 轮询路径: " .. bridgePath)
@@ -106,10 +119,10 @@ end
 
 -- 清理
 function onDestroy()
-    -- 移除定时器
-    if timerCallback then
-        CS.FairyGUI.Timers.inst:Remove(timerCallback)
-        timerCallback = nil
+    local cb = _G._mcpBridgeTimerCallback
+    if cb then
+        CS.FairyGUI.Timers.inst:Remove(cb)
+        _G._mcpBridgeTimerCallback = nil
     end
     fprint("[MCPBridge] 插件已停止")
 end

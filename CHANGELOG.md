@@ -78,6 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bug-6：`reload` 单包刷新无视觉变化** — 5 种策略并行尝试。
 - **Bug-7：`move/delete_resource` 后编辑器不自动刷新** — 操作成功后自动发送 reload 命令。
 - **Bug-8：`capture_preview` 截图包含编辑器 UI** — 通过深度探查 testView 内部结构（含 toolbar、controllerList、docContainer 等子元素），定位到真正的预览容器 `docContainer`，并支持裁剪到设备屏幕区域。
+- **Bug-9：`fg_editor_select_element` 触发 CustomShadow 越界** — 改用 `UnselectAll + SelectObject` 替代 `SetSelection`，避免 `inspectingObjectType` / `inspectingTarget` 状态不一致。
+- **Bug-10：`MCPBridge` 重载时 C# 引用泄漏** — 每次重载插件时旧 Timer 闭包无法释放。把回调引用存入 `_G` 持久化 + 唯一 ID 自杀机制，旧回调检测到 ID 变更后主动从 `Timers.inst:Remove()` 移除自己。
 
 ### Removed
 
@@ -98,4 +100,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 详见 [TODO.md](./TODO.md)：
 - `fg_editor_capture_preview` 截图清晰度受用户手动滚轮缩放影响
 - `fg_editor_start_test` 的 `device_name` 设备信息匹配但分辨率切换 API 不生效
-- `fg_editor_select_element` 触发 CustomShadow 插件越界报错；检查器面板未自动刷新
+- `fg_editor_select_element` 检查器面板无法自动同步（FairyEditor 私有 API 限制）

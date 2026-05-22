@@ -130,6 +130,9 @@
 - ✅ `capture_preview` 排除编辑器 UI（裁剪到设备屏幕）
 - ✅ 新增 `select_element` 工具
 - ✅ 移除不可靠的 `reload_all_plugins`
+- ✅ `select_element` 检查器面板限制 — 诚实暴露 `Document.inspectingTarget` 不可写，改用 `UnselectAll + SelectObject` 替代 `SetSelection`，避免 CustomShadow 越界
+- ✅ `CustomShadow` 插件空值保护 — 读取 `inspectingTarget` 前先检查 `inspectingTargets.Count > 0`，避免 `UnselectAll` 短暂清空集合时越界
+- ✅ `MCPBridge` C# 引用泄漏 — 重载插件时旧 Timer 闭包无法释放。改用 `_G` 持久化回调引用 + 唯一 ID 自杀机制，让旧回调检测自己已被覆盖后主动从 `Timers` 移除
 
 ## 📚 探查发现的关键 FairyGUI 编辑器 API
 
