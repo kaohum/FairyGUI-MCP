@@ -4,7 +4,8 @@
 ---@type CS.FairyEditor.App
 local App = App
 
--- 插件路径
+-- 插件路径（同时保存到全局，供 src/ext 下的子模块定位自身）
+_G._mcpPluginPath = PluginPath
 local bridgePath = PluginPath .. "/bridge"
 
 -- ========== fprint 拦截（日志缓冲区） ==========
@@ -77,7 +78,11 @@ local function init()
     _G._mcpBridgeTimerCallback = function()
         -- 旧回调自杀：如果全局 ID 已变更，说明发生了重载
         if _G._mcpBridgeCallbackId ~= myCallbackId then
-            CS.FairyGUI.Timers.inst:Remove(_G._mcpBridgeTimerCallback)
+            -- 防御：跨语言 delegate 包装对象可能已失效，Remove 可能抛
+            -- "Value cannot be null (key)"，必须 pcall 保护，否则每帧刷错
+            pcall(function()
+                CS.FairyGUI.Timers.inst:Remove(_G._mcpBridgeTimerCallback)
+            end)
             _G._mcpBridgeTimerCallback = nil
             return
         end
@@ -86,11 +91,10 @@ local function init()
         -- F5/Preview 模式会频繁覆盖此值，必须持续重置
         CS.UnityEngine.Application.runInBackground = true
 
+        -- 注意：这里不再周期性打印心跳日志。
+        -- 轮询是静默的，只有真正处理命令/收到信号时才打印（见 CommandHandler.poll），
+        -- 避免控制台被 "轮询运行中" 刷屏。
         pollCount = pollCount + 1
-        -- 每 50 次（约 5 秒）打印一次状态
-        if pollCount % 50 == 0 then
-            fprint("[MCPBridge] 轮询运行中，已检查 " .. pollCount .. " 次")
-        end
 
         -- 检查热重载信号
         if CS.System.IO.File.Exists(reloadSignalPath) then
